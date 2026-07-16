@@ -3,6 +3,7 @@ name: Cypress UI and API Tests
 on:
   pull_request:
     branches: [main, qa]
+    types: [opened, reopened]
   workflow_dispatch:
 
 concurrency:
