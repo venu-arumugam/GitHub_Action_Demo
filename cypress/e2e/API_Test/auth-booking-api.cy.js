@@ -63,7 +63,7 @@ describe("Token-Authenticated Booking API Tests", () => {
     const updatedPayload = {
       ...bookingData.validBooking,
       firstname: "UpdatedName",
-      totalprice: randomPrice()
+      totalprice: randomPrice() 
     };
 
     BookingService.updateBooking(createdBookingId, token, updatedPayload).then((response) => {
