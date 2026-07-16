@@ -1,34 +1,24 @@
 name: CodeQL Security Scan
 
-# Code scanning alerts (where CodeQL results are displayed) require
-# GitHub Advanced Security, which is only available on organization-owned
-# repositories - not on personal account private repos like this one.
-# This workflow is fully configured and ready to activate; it is
-# intentionally disabled (no triggers at all) for this demo.
-# To enable it once this repo moves to an organization account,
-# uncomment the "on:" block below.
-
-# on:
-#   pull_request:
-#     branches: [main, qa]
-#   schedule:
-#     - cron: "0 6 * * 1"
-#   workflow_dispatch:
-
-on: {}
+on:
+  workflow_dispatch:
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
+
     permissions:
       security-events: write
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: github/codeql-action/init@v3
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
         with:
-          languages: javascript
+          languages: javascript-typescript
 
-      - uses: github/codeql-action/analyze@v3
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
