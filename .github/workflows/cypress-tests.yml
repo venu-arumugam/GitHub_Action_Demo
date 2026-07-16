@@ -1,0 +1,110 @@
+name: Cypress UI and API Tests
+
+on:
+  pull_request:
+    branches: [main, qa]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cypress-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      matrix:
+        browser: [chrome, edge]
+      fail-fast: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint (code quality / linting)
+        run: npm run lint
+
+      - name: Run npm audit (dependency security check)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      # ---------------------------------------------------------------
+      # SonarCloud Scan (code quality + security analysis)
+      # Not enabled for this demo - requires SonarCloud account setup
+      # and a SONAR_TOKEN repository secret. Shown here to illustrate
+      # how it would be wired into the pipeline.
+      #
+      # - name: SonarCloud Scan
+      #   uses: SonarSource/sonarcloud-github-action@master
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # ---------------------------------------------------------------
+
+      - name: Validate required secrets are present
+        run: |
+          missing=0
+          if [ -z "${{ secrets.ADMIN_USERNAME }}" ]; then
+            echo "Missing secret: ADMIN_USERNAME"
+            missing=1
+          fi
+          if [ -z "${{ secrets.ADMIN_PASSWORD }}" ]; then
+            echo "Missing secret: ADMIN_PASSWORD"
+            missing=1
+          fi
+          if [ "$missing" -eq 1 ]; then
+            echo "One or more required secrets are missing. Failing the build."
+            exit 1
+          fi
+          echo "All required secrets are present."
+
+      - name: Log secret usage for this run (names only, never values)
+        run: |
+          echo "Run triggered by: ${{ github.actor }}"
+          echo "Run timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "Secrets used in this run: ADMIN_USERNAME, ADMIN_PASSWORD"
+          echo "Branch/ref: ${{ github.ref }}"
+
+      - name: Run Cypress tests (${{ matrix.browser }})
+        run: npx cypress run --browser ${{ matrix.browser }}
+        env:
+          CYPRESS_ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
+          CYPRESS_ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+
+      - name: Upload Mochawesome report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mochawesome-report-${{ matrix.browser }}
+          path: cypress/reports/html
+          retention-days: 7
+
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-screenshots-${{ matrix.browser }}
+          path: cypress/screenshots
+          retention-days: 7
+
+      - name: Upload videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-videos-${{ matrix.browser }}
+          path: cypress/videos
+          retention-days: 7
