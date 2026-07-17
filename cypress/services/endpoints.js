@@ -1,4 +1,4 @@
-const BASE_URL = Cypress.env("apiBaseUrl") || "https://restful-booker.herokuapp.com";
+const BASE_URL = Cypress.env("apiBaseUrl");
 
 const Endpoints = {
   booking: `${BASE_URL}/booking`,
