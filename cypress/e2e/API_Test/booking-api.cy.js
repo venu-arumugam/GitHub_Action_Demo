@@ -43,9 +43,6 @@ describe("Booking API Tests", () => {
 
   it("Negative - POST with missing required fields", () => {
     BookingService.createBookingExpectFailure(bookingData.invalidBooking).then((response) => {
-      // RESTful Booker does not validate malformed payloads gracefully —
-      // it throws an unhandled server error (500) instead of a proper 400.
-      // This test documents that actual (imperfect) behavior.
       expect(response.status).to.be.oneOf([200, 400, 500]);
     });
   });

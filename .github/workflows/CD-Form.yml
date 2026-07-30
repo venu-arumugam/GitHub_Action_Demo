@@ -1,0 +1,140 @@
+name: CD - Deploy
+
+# ===========================================================================
+# ADD THIS FILE alongside your existing CI / test-automation workflow.
+# Your CI builds + tests + packages (the MSI) automatically on merge.
+# THIS file does the deployment — and only when a person fills the form.
+#
+# Identity: the self-hosted runner is installed as a Windows service running
+# as the site gMSA. So every command here already runs AS that gMSA — Ansible
+# authenticates to the line machines over WinRM using Kerberos with the gMSA.
+# There are NO passwords or secrets for the deploy account anywhere in here.
+# ===========================================================================
+
+on:
+  workflow_dispatch:            # MANUAL ONLY — this is what creates the form
+    inputs:
+      app:
+        description: "Which application"
+        type: choice
+        options: [SparkMDP, MDPAutoFileUpload]
+        default: SparkMDP
+      version:
+        description: "Version to deploy (e.g. 1.4.2). For rollback, enter an older version."
+        required: true
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [test, prod]     # 'prod' triggers the approver gate (see below)
+        default: test
+      site:
+        description: "Which site"
+        type: choice
+        options: [pom, dkr, mex, suz, ziyang]
+        default: pom
+      lines:
+        description: "Lines: 'all' or a comma list like line1,line3"
+        default: "all"
+        required: true
+      rollout:
+        description: "canary = one line first then rest | all = every chosen line at once"
+        type: choice
+        options: [canary, all]
+        default: canary
+
+jobs:
+  deploy:
+    # Route the job to the chosen site's runner (labeled per site).
+    runs-on: [self-hosted, deploy, "${{ inputs.site }}"]
+
+    # =======================================================================
+    # >>> PAUSE / APPROVER GATE IS HERE <<<
+    # This one line ties the job to a GitHub "Environment" of the same name.
+    # The 'prod' environment is configured once (repo Settings -> Environments
+    # -> prod -> Required reviewers). When environment == prod, GitHub PAUSES
+    # this WHOLE job BEFORE any step below runs, and notifies the reviewers.
+    # The job only continues after one of them clicks Approve.
+    # 'test' has no reviewers, so it runs straight through with no pause.
+    #
+    # ORDER:  fill form -> [PAUSE for approval] -> steps run -> Ansible triggers
+    #         Nothing below this line runs until approval is given.
+    # =======================================================================
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Get deployment scripts (playbooks + inventory)
+        uses: actions/checkout@v4
+
+      - name: Show what will happen
+        shell: pwsh
+        run: |
+          Write-Host "App=${{ inputs.app }}  Version=${{ inputs.version }}"
+          Write-Host "Environment=${{ inputs.environment }}  Site=${{ inputs.site }}"
+          Write-Host "Lines=${{ inputs.lines }}  Rollout=${{ inputs.rollout }}"
+          Write-Host "Running as: $env:USERNAME (the site gMSA)"
+
+      # ---- Prod safety: only deploy versions that passed the Test gate ----
+      - name: Verify version passed POM Test (prod only)
+        if: ${{ inputs.environment == 'prod' }}
+        shell: pwsh
+        run: |
+          $marker = "gate-passed/${{ inputs.app }}-${{ inputs.version }}.txt"
+          if (-not (Test-Path $marker)) {
+            Write-Error "Version ${{ inputs.version }} has NOT passed POM Test. Refusing prod deploy."
+            exit 1
+          }
+          Write-Host "Confirmed: version passed POM Test."
+
+      - name: Download the versioned MSI
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.app }}-${{ inputs.version }}
+          path: ./package
+
+      # ---- Turn the form choices into an Ansible target ----
+      - name: Resolve target machines
+        id: target
+        shell: pwsh
+        run: |
+          $site  = "${{ inputs.site }}"
+          $lines = "${{ inputs.lines }}"
+          if ($lines -eq "all") { $limit = $site }
+          else {
+            $limit = (($lines -split ",") | ForEach-Object { "$site-$($_.Trim())" }) -join ","
+          }
+          echo "limit=$limit" >> $env:GITHUB_OUTPUT
+          $inv = "ansible/inventory/${{ inputs.environment }}.ini"   # test.ini or prod.ini
+          echo "inv=$inv" >> $env:GITHUB_OUTPUT
+          Write-Host "Target: $limit   Inventory: $inv"
+
+      # =======================================================================
+      # >>> ANSIBLE TRIGGERS HERE <<<  (only reached AFTER approval)
+      # This is the ONLY step that touches the line machines. It runs
+      # ansible-playbook, which connects over WinRM (as the gMSA, via Kerberos —
+      # no credentials passed) and, on each target machine, does:
+      #   stop service -> install MSI -> repoint 'current' -> start ->
+      #   health check -> auto-rollback to previous version if unhealthy.
+      #
+      #   -i      : which inventory (test.ini or prod.ini)
+      #   --limit : which site / lines to target (e.g. mex  or  mex-line1,mex-line3)
+      #   -e      : passes the app, version, MSI path, env, and canary/all setting
+      #
+      # serial_count=1 (canary) makes Ansible do one line first, then the rest.
+      # =======================================================================
+      - name: Deploy (Ansible trigger)
+        shell: pwsh
+        run: |
+          $serial = if ("${{ inputs.rollout }}" -eq "canary") { "1" } else { "0" }
+          ansible-playbook `
+            -i "${{ steps.target.outputs.inv }}" `
+            --limit "${{ steps.target.outputs.limit }}" `
+            ansible/playbooks/deploy_service.yml `
+            -e "app_name=${{ inputs.app }}" `
+            -e "app_version=${{ inputs.version }}" `
+            -e "package_path=./package/${{ inputs.app }}-${{ inputs.version }}.msi" `
+            -e "environment_name=${{ inputs.environment }}" `
+            -e "serial_count=$serial"
+
+      - name: Done
+        shell: pwsh
+        run: Write-Host "Deployment finished. See per-machine results above."
